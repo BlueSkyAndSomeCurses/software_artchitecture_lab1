@@ -1,0 +1,3 @@
+[workspace]
+members = ["services/facade", "services/logging", "services/messages", "shared"]
+resolver = "2"
