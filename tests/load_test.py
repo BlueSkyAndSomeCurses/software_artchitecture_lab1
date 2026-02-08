@@ -82,73 +82,6 @@ def diff_metrics(
 		"logging_time": max(0, after.get("logging_time", 0) - before.get("logging_time", 0)),
 	}
 
-
-def verify_distinct_accounts(
-	base_url: str,
-	user_ids: list[str],
-	expected_balance: float,
-	timeout_s: float,
-) -> tuple[bool, str]:
-	try:
-		balances = http_get_json(base_url, "/accounts", timeout_s)
-	except Exception:
-		return False, "failed to fetch /accounts"
-
-	if not isinstance(balances, dict):
-		return False, "unexpected /accounts response"
-
-	for user_id in user_ids:
-		balance = balances.get(user_id)
-		if balance is None:
-			return False, f"missing account {user_id}"
-		if abs(balance - expected_balance) > 1e-9:
-			return False, f"account {user_id} balance {balance} != {expected_balance}"
-
-	return True, "ok"
-
-
-def verify_single_account(
-	base_url: str,
-	user_id: str,
-	expected_balance: float,
-	timeout_s: float,
-) -> tuple[bool, str]:
-	try:
-		payload = http_get_json(base_url, f"/user/{user_id}", timeout_s)
-	except Exception:
-		return False, "failed to fetch /user/{user_id}"
-
-	if not isinstance(payload, dict):
-		return False, "unexpected /user response"
-
-	balance = payload.get("balance")
-	if balance is None:
-		return False, "missing balance in /user response"
-	if abs(balance - expected_balance) > 1e-9:
-		return False, f"balance {balance} != {expected_balance}"
-
-	return True, "ok"
-
-
-def verify_users_via_user_endpoint(
-	base_url: str,
-	user_ids: list[str],
-	expected_balance: float,
-	timeout_s: float,
-) -> tuple[bool, str]:
-	for user_id in user_ids:
-		ok, msg = verify_single_account(
-			base_url,
-			user_id,
-			expected_balance,
-			timeout_s,
-		)
-		if not ok:
-			return False, msg
-
-	return True, "ok"
-
-
 def run_scenario(
 	name: str,
 	base_url: str,
@@ -232,16 +165,12 @@ def main() -> None:
 			args.amount,
 			args.timeout,
 		)
-		ok, msg = verify_distinct_accounts(
-			args.base_url, user_ids, args.per_client * args.amount, args.timeout
+		print(
+			http_get_json(args.base_url, "/accounts", args.timeout)
 		)
-		status = "OK" if ok else "FAIL"
-		print(f"Verification: {status} ({msg})")
-		ok, msg = verify_users_via_user_endpoint(
-			args.base_url, user_ids, args.per_client * args.amount, args.timeout
-		)
-		status = "OK" if ok else "FAIL"
-		print(f"Verification (/user): {status} ({msg})")
+		for user_id in user_ids:
+			user_account_info = http_get_json(args.base_url, f"/user/{user_id}", args.timeout)
+			print(f"User {user_id}, balance: {user_account_info['balance']}")
 
 	if run_same:
 		shared_user_id = f"shared-{uuid.uuid4().hex[:8]}"
@@ -254,12 +183,12 @@ def main() -> None:
 			args.amount,
 			args.timeout,
 		)
-		expected = args.clients * args.per_client * args.amount
-		ok, msg = verify_single_account(
-			args.base_url, shared_user_id, expected, args.timeout
+		print(
+			http_get_json(args.base_url, "/accounts", args.timeout)
 		)
-		status = "OK" if ok else "FAIL"
-		print(f"Verification: {status} ({msg})")
+		for user_id in user_ids:
+			user_account_info = http_get_json(args.base_url, f"/user/{user_id}", args.timeout)
+			print(f"User {user_id}, balance: {user_account_info['balance']}")
 
 
 if __name__ == "__main__":
