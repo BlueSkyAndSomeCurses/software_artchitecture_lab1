@@ -25,3 +25,15 @@ pub struct UserInfoResponse {
     pub balance: f64,
     pub transactions: Vec<f64>,
 }
+
+#[derive(Debug, Default, Serialize, Clone)]
+pub struct Metrics {
+    pub counter_time: u128,
+    pub logging_time: u128,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ServiceKind {
+    Counter,
+    Logging,
+}

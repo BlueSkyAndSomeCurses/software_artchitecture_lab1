@@ -1,0 +1,31 @@
+services:
+  facade:
+    build:
+      context: .
+      dockerfile: services/facade/Dockerfile
+    container_name: facade
+    ports:
+      - "8080:8080"
+    environment:
+      RUST_LOG: info
+
+  messages:
+    build:
+      context: .
+      dockerfile: services/messages/Dockerfile
+    container_name: messgaes
+    ports:
+      - "8081:8081"
+    environment:
+      RUST_LOG: info
+
+
+  logging:
+    build:
+      context: .
+      dockerfile: services/logging/Dockerfile
+    container_name: logging
+    ports:
+      - "8082:8082"
+    environment:
+      RUST_LOG: info
