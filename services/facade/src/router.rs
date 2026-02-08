@@ -10,5 +10,8 @@ pub fn create_router() -> Router {
     let client = Arc::new(Client::new());
 
     Router::new()
-        .route("/transaction", post(handlers::process_transaction)).with_state(client)
+        .route("/transaction", post(handlers::process_transaction))
+        .route("/user/{user_id}", get(handlers::get_user_info))
+        .route("/accounts", get(handlers::get_accounts_balances))
+        .with_state(client)
 }

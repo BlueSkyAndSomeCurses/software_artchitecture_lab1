@@ -11,19 +11,18 @@ use crate::handlers;
 #[derive(Clone)]
 pub struct AppState {
     pub client: Arc<Client>,
-    pub db: Arc<Mutex<HashMap<String, f64>>>,
+    pub log_db: Arc<Mutex<HashMap<String, (String, f64)>>>,
 }
 
 pub fn create_router() -> Router {
     
     let state = AppState {
         client: Arc::new(Client::new()),
-        db: Arc::new(Mutex::new(HashMap::new())),
+        log_db: Arc::new(Mutex::new(HashMap::new())),
     };
 
     Router::new()
-        .route("/counter", post(handlers::process_transaction))
-        .route("/user/{user_id}", get(handlers::get_user_balance))
-        .route("/accounts", get(handlers::get_user_balances))
+        .route("/log", post(handlers::process_transaction))
+        .route("/transactions/{user_id}", get(handlers::get_user_transactions))
         .with_state(state)
 }
