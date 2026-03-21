@@ -5,6 +5,8 @@ use axum::{extract::State, http::StatusCode, Json};
 
 use shared::models::{TransactionCommand, TransactionResponse};
 
+use sqlx::Row;
+
 use crate::router::AppState;
 
 pub async fn process_transaction(
@@ -15,17 +17,27 @@ pub async fn process_transaction(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let mut db = app_state.db.lock().await;
-    
-    let balance_ref = db
-        .entry(payload.user_id.clone())
-        .and_modify(|curr_bal| *curr_bal += payload.amount)
-        .or_insert(payload.amount);
+    let query = r#"
+        INSERT INTO user_balances (user_id, balance)
+        VALUES ($1, $2)
+        ON CONFLICT (user_id)
+        DO UPDATE SET balance = user_balances.balance + EXCLUDED.balance
+        RETURNING balance
+    "#;
 
-    return Ok(Json(TransactionResponse {
-        balance: *balance_ref,
-        user_id: payload.user_id,
-    }));
+    let result = sqlx::query_scalar::<_, f64>(query)
+        .bind(&payload.user_id)
+        .bind(payload.amount)
+        .fetch_one(&app_state.db)
+        .await;
+    
+    match result {
+        Ok(new_balance) => Ok(Json(TransactionResponse {
+            balance: new_balance,
+            user_id: payload.user_id,
+        })),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
 }
 
 pub async fn get_user_balance(
@@ -35,15 +47,38 @@ pub async fn get_user_balance(
     if user_id.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
-
-    let mut db = app_state.db.lock().await;
     
-    return Ok(Json(*db.entry(user_id).or_insert(0.0)));
+    let query = "SELECT balance FROM user_balances WHERE user_id = $1";
+
+    let balance = sqlx::query_scalar::<_, f64>(query)
+        .bind(&user_id)
+        .fetch_optional(&app_state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    Ok(Json(balance.unwrap_or(0.0)))
 }
 
 
 pub async fn get_user_balances(
     State(app_state): State<AppState>,
 ) -> Json<HashMap<String, f64>> {
-    return Json(app_state.db.lock().await.clone());
+    
+    let query = "SELECT user_id, balance FROM user_balances";
+    
+    let rows = sqlx::query(query)
+        .fetch_all(&app_state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        .unwrap();
+
+    let mut map = HashMap::with_capacity(rows.len());
+
+    for row in rows {
+        let user_id: String = row.get("user_id");
+        let balance: f64 = row.get("balance");
+        map.insert(user_id, balance);
+    }
+
+    Json(map)
 }

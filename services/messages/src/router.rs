@@ -1,24 +1,29 @@
-use std::{collections::HashMap};
 use axum::{
     routing::{get, post},
     Router,
 };
 use reqwest::Client;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use crate::handlers;
+use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
+
+use std::env;
 
 #[derive(Clone)]
 pub struct AppState {
     pub client: Arc<Client>,
-    pub db: Arc<Mutex<HashMap<String, f64>>>,
+    pub db: PgPool
 }
 
-pub fn create_router() -> Router {
+pub async fn create_router() -> Router {
+    let db_url = env::var("DATABASE_URL").expect("DATABASE_URL environment variable must be set");
+    
+    let pg_pool = PgPoolOptions::new().max_connections(5).connect(&db_url).await.unwrap();
     
     let state = AppState {
         client: Arc::new(Client::new()),
-        db: Arc::new(Mutex::new(HashMap::new())),
+        db: pg_pool
     };
 
     Router::new()

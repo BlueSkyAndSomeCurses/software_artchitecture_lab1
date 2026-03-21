@@ -1,8 +1,7 @@
-use std::vec;
-
 use axum::{extract::State, http::StatusCode, Json};
 
 use shared::models::{TransactionCommand};
+use fred::prelude::{Error as RedisError, HashesInterface};
 
 use crate::router::AppState;
 
@@ -14,12 +13,23 @@ pub async fn process_transaction(
         return StatusCode::BAD_REQUEST;
     }
 
-    let mut log_db = app_state.log_db.lock().await;
-
-    log_db.insert(payload.transaction_id.clone(), (payload.user_id.clone(), payload.amount));
-    println!("Logged transaction: {} for user: {} with amount: {}", payload.transaction_id, payload.user_id, payload.amount);
-
-    return StatusCode::OK;
+    let log_db = &app_state.redis;
+    
+    let redis_key = format!("user:{}:transactions", payload.user_id);
+    
+    let result: Result<(), RedisError> = log_db.hset(redis_key, (payload.transaction_id.clone(), payload.amount)).await;
+    
+    match result {
+        Ok(_) => {
+            println!("Logged transaction: {} for user: {} with amount: {}", payload.transaction_id, payload.user_id, payload.amount);
+            StatusCode::OK
+        }
+        Err(e) => {
+            eprintln!("Failed to write to Redis: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+        
+    }
 }
 
 pub async fn get_user_transactions(
@@ -29,13 +39,24 @@ pub async fn get_user_transactions(
     if user_id.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
-
-    let log_db = app_state.log_db.lock().await;
     
-    let user_transactions: Vec<f64> = log_db.iter()
-        .filter(|(_, (uid, _))| uid == &user_id)
-        .map(|(_, (_, amount))| *amount)
-        .collect();
+    let log_db = &app_state.redis;
+    let redis_key = format!("user:{}:transactions", user_id);
 
-    return Ok(Json(user_transactions));
+    let result: Result<Vec<String>, RedisError> = log_db.hvals(&redis_key).await;
+
+    match result {
+        Ok(amounts_str) => {
+            let user_transactions: Vec<f64> = amounts_str
+                .into_iter()
+                .filter_map(|s| s.parse::<f64>().ok())
+                .collect();
+
+            Ok(Json(user_transactions))
+        }
+        Err(e) => {
+            eprintln!("Failed to read from Redis: {:?}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
 }

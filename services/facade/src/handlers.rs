@@ -51,6 +51,8 @@ pub async fn process_transaction(
         user_id: payload.user_id,
         amount: payload.amount,
     };
+    
+    println!("Some logs");
 
     let (counter_result, log_result) = tokio::join!(
         async {
@@ -67,7 +69,7 @@ pub async fn process_transaction(
             let start = Instant::now();
             let resp = state
                 .client
-                .post("http://logging:8082/log")
+                .post("http://logging/log")
                 .json(&transaction_cmd)
                 .send()
                 .await;
@@ -76,7 +78,7 @@ pub async fn process_transaction(
     );
 
     let (counter_resp, counter_elapsed) = counter_result;
-    let (_, log_elapsed) = log_result;
+    let (log_resp, log_elapsed) = log_result;
     update_timing(&state.metrics, ServiceKind::Counter, counter_elapsed).await;
     update_timing(&state.metrics, ServiceKind::Logging, log_elapsed).await;
 
@@ -84,6 +86,11 @@ pub async fn process_transaction(
         Ok(resp) if resp.status().is_success() => {
             resp.json().await.map_err(|_| StatusCode::BAD_GATEWAY)?
         }
+        _ => return Err(StatusCode::BAD_GATEWAY),
+    };
+
+    match log_resp {
+        Ok(resp) if resp.status().is_success() => {}
         _ => return Err(StatusCode::BAD_GATEWAY),
     };
 
@@ -113,7 +120,7 @@ pub async fn get_user_info(
             let start = Instant::now();
             let resp = state
                 .client
-                .get(&format!("http://logging:8082/transactions/{}", user_id))
+                .get(&format!("http://logging/transactions/{}", user_id))
                 .send()
                 .await;
 
