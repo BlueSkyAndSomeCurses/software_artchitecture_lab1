@@ -13,7 +13,7 @@ use fred::prelude::{Config, Server, ServerConfig, Builder, Client as RedisClient
 #[derive(Clone)]
 pub struct AppState {
     pub http_client: Arc<HttpClient>,
-    pub redis: RedisClient,
+    pub redis: Option<RedisClient>,
 }
 
 pub async fn create_router() -> Result<Router, FredError> {
@@ -22,7 +22,6 @@ pub async fn create_router() -> Result<Router, FredError> {
     let sentinels_env = env::var("REDIS_SENTINELS")
         .unwrap_or_else(|_| "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379".to_string());
     
-    println!("{}", redis_password);
     println!("{}", master_name);
     println!("{}", sentinels_env);
 
@@ -34,12 +33,7 @@ pub async fn create_router() -> Result<Router, FredError> {
         }
     }
     
-    let mut attempts = 0;
-    
-    // Loop to wait for Docker containers and Sentinel to finish electing a master
-    let redis_client = loop {
-        // We build the config inside the loop so we can retry fresh every time
-        let config = Config {
+    let config = Config {
             server: ServerConfig::Sentinel {
                 service_name: master_name.clone().into(),
                 hosts: sentinel_hosts.clone(),
@@ -49,23 +43,16 @@ pub async fn create_router() -> Result<Router, FredError> {
         };
 
         let client = Builder::from_config(config).build().unwrap();
-        
-        match client.init().await {
-            Ok(_) => {
-                println!("✅ Successfully connected to Redis Sentinel master!"); // I like those emojies
-                break client;
-            }
-            Err(e) => {
-                attempts += 1;
-                eprintln!("⏳ Waiting for Redis cluster to stabilize (Attempt {}/5)...", attempts);
-                eprintln!("Reason: {:?}", e);
-                
-                if attempts >= 15 {
-                    return Err(e.into());
-                }
-                
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            }
+    
+    
+    let redis_client = match client.init().await {
+        Ok(_) => {
+            println!("✅ Successfully connected to Redis Sentinel master!"); // I like those emojies
+            Some(client)
+        }
+        Err(e) => {
+            eprintln!("Redis is unavailable, starting without it: {:?}", e);
+            None
         }
     };
     

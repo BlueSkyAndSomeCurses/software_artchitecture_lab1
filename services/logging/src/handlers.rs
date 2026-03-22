@@ -13,23 +13,20 @@ pub async fn process_transaction(
         return StatusCode::BAD_REQUEST;
     }
 
-    let log_db = &app_state.redis;
-    
     let redis_key = format!("user:{}:transactions", payload.user_id);
     
-    let result: Result<(), RedisError> = log_db.hset(redis_key, (payload.transaction_id.clone(), payload.amount)).await;
-    
-    match result {
-        Ok(_) => {
-            println!("Logged transaction: {} for user: {} with amount: {}", payload.transaction_id, payload.user_id, payload.amount);
-            StatusCode::OK
+    if let Some(redis) = &app_state.redis {
+        let result: Result<(), RedisError> =
+            redis.hset(redis_key, (payload.transaction_id.clone(), payload.amount)).await;
+
+        if let Err(e) = result {
+            eprintln!("Redis write failed, skipping: {:?}", e);
         }
-        Err(e) => {
-            eprintln!("Failed to write to Redis: {:?}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        }
-        
+    } else {
+        eprintln!("Redis not available, skipping write");
     }
+    
+    StatusCode::OK
 }
 
 pub async fn get_user_transactions(
@@ -40,10 +37,15 @@ pub async fn get_user_transactions(
         return Err(StatusCode::BAD_REQUEST);
     }
     
-    let log_db = &app_state.redis;
+    let redis = match &app_state.redis {
+        Some(r) => r,
+        None => {
+            eprintln!("Redis not available");
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
+    };
     let redis_key = format!("user:{}:transactions", user_id);
-
-    let result: Result<Vec<String>, RedisError> = log_db.hvals(&redis_key).await;
+    let result: Result<Vec<String>, RedisError> = redis.hvals(&redis_key).await;
 
     match result {
         Ok(amounts_str) => {
@@ -55,8 +57,8 @@ pub async fn get_user_transactions(
             Ok(Json(user_transactions))
         }
         Err(e) => {
-            eprintln!("Failed to read from Redis: {:?}", e);
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            eprintln!("Redis read failed: {:?}", e);
+            Err(StatusCode::SERVICE_UNAVAILABLE)
         }
-    }
+    } 
 }

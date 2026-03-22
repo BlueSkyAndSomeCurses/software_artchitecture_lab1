@@ -50,12 +50,18 @@ services:
       REDIS_SENTINELS: redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
     depends_on:
-      - redis-1
-      - redis-2
-      - redis-3
-      - redis-sentinel-1
-      - redis-sentinel-2
-      - redis-sentinel-3
+      redis-1:
+        condition: service_healthy
+      redis-2:
+        condition: service_healthy
+      redis-3:
+        condition: service_healthy
+      redis-sentinel-1:
+        condition: service_healthy
+      redis-sentinel-2:
+        condition: service_healthy
+      redis-sentinel-3:
+        condition: service_healthy
       
   logging:
     image: nginx:alpine
@@ -71,6 +77,11 @@ services:
     environment:
       - REDIS_REPLICATION_MODE=master
       - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   redis-2:
     image: bitnami/redis:latest
@@ -81,6 +92,11 @@ services:
       - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD is required}
     depends_on:
       - redis-1
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   redis-3:
     image: bitnami/redis:latest
@@ -91,6 +107,11 @@ services:
       - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD is required}
     depends_on:
       - redis-1
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   redis-sentinel-1:
     image: bitnami/redis-sentinel:latest
@@ -103,6 +124,11 @@ services:
       - redis-1
       - redis-2
       - redis-3
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "26379", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   redis-sentinel-2:
     image: bitnami/redis-sentinel:latest
@@ -115,6 +141,11 @@ services:
       - redis-1
       - redis-2
       - redis-3
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "26379", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   redis-sentinel-3:
     image: bitnami/redis-sentinel:latest
@@ -127,6 +158,11 @@ services:
       - redis-1
       - redis-2
       - redis-3
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "26379", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
 volumes:
   facade-postgres-data:
