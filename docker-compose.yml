@@ -5,8 +5,14 @@ services:
       dockerfile: services/facade/Dockerfile
     ports:
       - "8080:8080"
+    depends_on:
+      - config-server
+      - kafka
     environment:
       RUST_LOG: info
+      CONFIG_SERVER_URL: http://config-server:8083
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TRANSACTIONS_TOPIC: transactions
 
   messages:
     build:
@@ -16,9 +22,31 @@ services:
       - "8081:8081"
     depends_on:
       - postgres
+      - kafka
     environment:
       RUST_LOG: info
       DATABASE_URL: postgres://${POSTGRES_USER:-facade_user}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:-facade_db}
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TRANSACTIONS_TOPIC: transactions
+      KAFKA_CONSUMER_GROUP: messages-service-group
+
+  kafka:
+    image: apache/kafka:latest
+    ports:
+      - "9092:9092"
+    environment:
+      - KAFKA_NODE_ID=0
+      - KAFKA_PROCESS_ROLES=controller,broker
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=0@kafka:9093
+      - KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
 
   postgres:
     image: postgres:16-alpine
@@ -36,14 +64,12 @@ services:
       timeout: 5s
       retries: 5
 
-  logging-backend:
+  logging-1:
     build:
       context: .
       dockerfile: services/logging/Dockerfile
     expose:
       - "8082"
-    deploy:
-      replicas: 3
     environment:
       RUST_LOG: info
       REDIS_MASTER_NAME: mymaster
@@ -62,15 +88,73 @@ services:
         condition: service_healthy
       redis-sentinel-3:
         condition: service_healthy
-      
-  logging:
-    image: nginx:alpine
-    ports:
-      - "8082:80" 
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+
+  logging-2:
+    build:
+      context: .
+      dockerfile: services/logging/Dockerfile
+    expose:
+      - "8082"
+    environment:
+      RUST_LOG: info
+      REDIS_MASTER_NAME: mymaster
+      REDIS_SENTINELS: redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
     depends_on:
-      - logging-backend
+      redis-1:
+        condition: service_healthy
+      redis-2:
+        condition: service_healthy
+      redis-3:
+        condition: service_healthy
+      redis-sentinel-1:
+        condition: service_healthy
+      redis-sentinel-2:
+        condition: service_healthy
+      redis-sentinel-3:
+        condition: service_healthy
+
+  logging-3:
+    build:
+      context: .
+      dockerfile: services/logging/Dockerfile
+    expose:
+      - "8082"
+    environment:
+      RUST_LOG: info
+      REDIS_MASTER_NAME: mymaster
+      REDIS_SENTINELS: redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    depends_on:
+      redis-1:
+        condition: service_healthy
+      redis-2:
+        condition: service_healthy
+      redis-3:
+        condition: service_healthy
+      redis-sentinel-1:
+        condition: service_healthy
+      redis-sentinel-2:
+        condition: service_healthy
+      redis-sentinel-3:
+        condition: service_healthy
+
+  config-server:
+    build:
+      context: .
+      dockerfile: services/config-server/Dockerfile
+    ports:
+      - "8083:8083"
+    depends_on:
+      - logging-1
+      - logging-2
+      - logging-3
+      - messages
+    environment:
+      LOGGING_SERVICES: logging-1:8082,logging-2:8082,logging-3:8082
+      MESSAGES_SERVICE: messages:8081
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TRANSACTIONS_TOPIC: transactions
 
   redis-1:
     image: bitnami/redis:latest

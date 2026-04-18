@@ -1,3 +1,9 @@
 [workspace]
-members = ["services/facade", "services/logging", "services/messages", "shared"]
+members = [
+	"services/facade",
+	"services/logging",
+	"services/config-server",
+	"services/messages",
+	"shared",
+]
 resolver = "2"

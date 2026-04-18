@@ -1,4 +1,4 @@
-FROM rust:1.85 as builder
+FROM rust:1.88 as builder
 
 WORKDIR /app
 
@@ -18,5 +18,5 @@ WORKDIR /app
 
 COPY --from=builder /app/target/release/logging /usr/local/bin/logging
 
-EXPOSE 8080
+EXPOSE 8082
 CMD ["logging"]

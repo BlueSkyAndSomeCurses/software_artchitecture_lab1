@@ -3,7 +3,8 @@ use std::{
     time::{Instant, SystemTime},
 };
 
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use rdkafka::{producer::FutureRecord, util::Timeout};
 use uuid::Uuid;
 
 use tokio;
@@ -11,8 +12,8 @@ use tokio::sync::Mutex;
 
 use crate::router::AppState;
 use shared::models::{
-    Metrics, ServiceKind, TransactionCommand, TransactionMessage, TransactionResponse,
-    UserInfoResponse,
+    Metrics, ServiceIpResponse, ServiceKind, TransactionAcceptedResponse, TransactionCommand,
+    TransactionMessage, UserInfoResponse,
 };
 
 async fn update_timing(
@@ -30,10 +31,50 @@ async fn update_timing(
     *timing += last_ms;
 }
 
+async fn resolve_service_base_url(state: &AppState, endpoint_path: &str) -> Result<String, StatusCode> {
+    let response = state
+        .client
+        .get(format!("{}/{}", state.config_server_base_url, endpoint_path))
+        .send()
+        .await
+        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+
+    if !response.status().is_success() {
+        return Err(StatusCode::BAD_GATEWAY);
+    }
+
+    let endpoint = response
+        .json::<ServiceIpResponse>()
+        .await
+        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+
+    Ok(format!("http://{}:8082", endpoint.ip))
+}
+
+async fn resolve_messages_base_url(state: &AppState) -> Result<String, StatusCode> {
+    let response = state
+        .client
+        .get(format!("{}/messages-ip", state.config_server_base_url))
+        .send()
+        .await
+        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+
+    if !response.status().is_success() {
+        return Err(StatusCode::BAD_GATEWAY);
+    }
+
+    let endpoint = response
+        .json::<ServiceIpResponse>()
+        .await
+        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+
+    Ok(format!("http://{}:8081", endpoint.ip))
+}
+
 pub async fn process_transaction(
     State(state): State<AppState>,
     Json(payload): Json<TransactionMessage>,
-) -> Result<Json<TransactionResponse>, StatusCode> {
+) -> Result<impl IntoResponse, StatusCode> {
     if payload.user_id.is_empty() || payload.amount.is_nan() {
         return Err(StatusCode::BAD_REQUEST);
     }
@@ -47,21 +88,26 @@ pub async fn process_transaction(
     let transaction_id = format!("{}-{}", id, transaction_time);
 
     let transaction_cmd = TransactionCommand {
-        transaction_id: transaction_id,
+        transaction_id: transaction_id.clone(),
         user_id: payload.user_id,
         amount: payload.amount,
     };
-    
-    println!("Some logs");
 
-    let (counter_result, log_result) = tokio::join!(
+    let logging_base_url = resolve_service_base_url(&state, "logging-ip").await?;
+    let transaction_user_id = transaction_cmd.user_id.clone();
+    let kafka_payload = serde_json::to_string(&transaction_cmd).map_err(|_| StatusCode::BAD_GATEWAY)?;
+
+    let (queue_result, log_result) = tokio::join!(
         async {
             let start = Instant::now();
             let resp = state
-                .client
-                .post("http://messages:8081/counter")
-                .json(&transaction_cmd)
-                .send()
+                .kafka_producer
+                .send(
+                    FutureRecord::to(&state.kafka_transactions_topic)
+                        .payload(&kafka_payload)
+                        .key(&transaction_user_id),
+                    Timeout::Never,
+                )
                 .await;
             (resp, start.elapsed())
         },
@@ -69,7 +115,7 @@ pub async fn process_transaction(
             let start = Instant::now();
             let resp = state
                 .client
-                .post("http://logging/log")
+                .post(&format!("{}/log", logging_base_url))
                 .json(&transaction_cmd)
                 .send()
                 .await;
@@ -77,24 +123,29 @@ pub async fn process_transaction(
         }
     );
 
-    let (counter_resp, counter_elapsed) = counter_result;
+    let (queue_delivery, counter_elapsed) = queue_result;
     let (log_resp, log_elapsed) = log_result;
     update_timing(&state.metrics, ServiceKind::Counter, counter_elapsed).await;
     update_timing(&state.metrics, ServiceKind::Logging, log_elapsed).await;
 
-    let counter_resp = match counter_resp {
-        Ok(resp) if resp.status().is_success() => {
-            resp.json().await.map_err(|_| StatusCode::BAD_GATEWAY)?
-        }
+    match queue_delivery {
+        Ok(_) => {}
         _ => return Err(StatusCode::BAD_GATEWAY),
-    };
+    }
 
     match log_resp {
         Ok(resp) if resp.status().is_success() => {}
         _ => return Err(StatusCode::BAD_GATEWAY),
     };
 
-    Ok(Json(counter_resp))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(TransactionAcceptedResponse {
+            transaction_id,
+            user_id: transaction_cmd.user_id,
+            status: "queued".to_string(),
+        }),
+    ))
 }
 
 pub async fn get_user_info(
@@ -105,12 +156,15 @@ pub async fn get_user_info(
         return Err(StatusCode::BAD_REQUEST);
     }
 
+    let logging_base_url = resolve_service_base_url(&state, "logging-ip").await?;
+    let messages_base_url = resolve_messages_base_url(&state).await?;
+
     let (balance_resp_time, user_resp_time) = tokio::join!(
         async {
             let start = Instant::now();
             let resp = state
                 .client
-                .get(&format!("http://messages:8081/user/{}", user_id))
+                .get(&format!("{}/user/{}", messages_base_url, user_id))
                 .send()
                 .await;
 
@@ -120,7 +174,7 @@ pub async fn get_user_info(
             let start = Instant::now();
             let resp = state
                 .client
-                .get(&format!("http://logging/transactions/{}", user_id))
+                .get(&format!("{}/transactions/{}", logging_base_url, user_id))
                 .send()
                 .await;
 
@@ -130,16 +184,8 @@ pub async fn get_user_info(
     let (balance_resp, counter_elapsed) = balance_resp_time;
     let (user_trasactions_resp, logging_elapsed) = user_resp_time;
 
-    update_timing(
-        &state.metrics,
-        ServiceKind::Counter,
-        counter_elapsed
-    ).await;
-    update_timing(
-        &state.metrics,
-        ServiceKind::Logging,
-        logging_elapsed
-    ).await;
+    update_timing(&state.metrics, ServiceKind::Counter, counter_elapsed).await;
+    update_timing(&state.metrics, ServiceKind::Logging, logging_elapsed).await;
 
     let balance = match balance_resp {
         Ok(resp) if resp.status().is_success() => resp.json::<f64>().await.ok(),
@@ -163,7 +209,7 @@ pub async fn get_accounts_balances(
     let counter_start = Instant::now();
     let user_balances_resp = state
         .client
-        .get("http://messages:8081/accounts")
+        .get(format!("{}/accounts", resolve_messages_base_url(&state).await?))
         .send()
         .await
         .map_err(|_| StatusCode::BAD_GATEWAY)?;
@@ -172,7 +218,8 @@ pub async fn get_accounts_balances(
         &state.metrics,
         ServiceKind::Counter,
         counter_start.elapsed(),
-    ).await;
+    )
+    .await;
 
     if !user_balances_resp.status().is_success() {
         return Err(StatusCode::BAD_GATEWAY);
@@ -186,13 +233,8 @@ pub async fn get_accounts_balances(
     Ok(Json(user_balances))
 }
 
-pub async fn get_timings(
-    State(state): State<AppState>,
-) -> Result<Json<Metrics>, StatusCode> {
-    let guard = state
-        .metrics
-        .lock()
-        .await;
+pub async fn get_timings(State(state): State<AppState>) -> Result<Json<Metrics>, StatusCode> {
+    let guard = state.metrics.lock().await;
 
     Ok(Json(guard.clone()))
 }
