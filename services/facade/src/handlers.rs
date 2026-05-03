@@ -12,8 +12,8 @@ use tokio::sync::Mutex;
 
 use crate::router::AppState;
 use shared::models::{
-    Metrics, ServiceIpResponse, ServiceKind, TransactionAcceptedResponse, TransactionCommand,
-    TransactionMessage, UserInfoResponse,
+    Metrics, ServiceKind, TransactionAcceptedResponse, TransactionCommand, TransactionMessage,
+    UserInfoResponse,
 };
 
 async fn update_timing(
@@ -29,46 +29,6 @@ async fn update_timing(
 
     let last_ms = duration.as_nanos();
     *timing += last_ms;
-}
-
-async fn resolve_service_base_url(state: &AppState, endpoint_path: &str) -> Result<String, StatusCode> {
-    let response = state
-        .client
-        .get(format!("{}/{}", state.config_server_base_url, endpoint_path))
-        .send()
-        .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
-
-    if !response.status().is_success() {
-        return Err(StatusCode::BAD_GATEWAY);
-    }
-
-    let endpoint = response
-        .json::<ServiceIpResponse>()
-        .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
-
-    Ok(format!("http://{}:8082", endpoint.ip))
-}
-
-async fn resolve_messages_base_url(state: &AppState) -> Result<String, StatusCode> {
-    let response = state
-        .client
-        .get(format!("{}/messages-ip", state.config_server_base_url))
-        .send()
-        .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
-
-    if !response.status().is_success() {
-        return Err(StatusCode::BAD_GATEWAY);
-    }
-
-    let endpoint = response
-        .json::<ServiceIpResponse>()
-        .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
-
-    Ok(format!("http://{}:8081", endpoint.ip))
 }
 
 pub async fn process_transaction(
@@ -93,7 +53,7 @@ pub async fn process_transaction(
         amount: payload.amount,
     };
 
-    let logging_base_url = resolve_service_base_url(&state, "logging-ip").await?;
+    let logging_base_url = state.logging_base_url.clone();
     let transaction_user_id = transaction_cmd.user_id.clone();
     let kafka_payload = serde_json::to_string(&transaction_cmd).map_err(|_| StatusCode::BAD_GATEWAY)?;
 
@@ -156,8 +116,8 @@ pub async fn get_user_info(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let logging_base_url = resolve_service_base_url(&state, "logging-ip").await?;
-    let messages_base_url = resolve_messages_base_url(&state).await?;
+    let logging_base_url = state.logging_base_url.clone();
+    let messages_base_url = state.counter_base_url.clone();
 
     let (balance_resp_time, user_resp_time) = tokio::join!(
         async {
@@ -207,9 +167,10 @@ pub async fn get_accounts_balances(
     State(state): State<AppState>,
 ) -> Result<Json<HashMap<String, f64>>, StatusCode> {
     let counter_start = Instant::now();
+    let counter_base_url = state.counter_base_url.clone();
     let user_balances_resp = state
         .client
-        .get(format!("{}/accounts", resolve_messages_base_url(&state).await?))
+        .get(format!("{}/accounts", counter_base_url))
         .send()
         .await
         .map_err(|_| StatusCode::BAD_GATEWAY)?;

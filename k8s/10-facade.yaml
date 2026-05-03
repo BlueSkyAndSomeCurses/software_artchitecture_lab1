@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: facade-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: facade-service
+  template:
+    metadata:
+      labels:
+        app: facade-service
+    spec:
+      serviceAccountName: facade-sa
+      containers:
+        - name: facade
+          image: facade-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: KUBE_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: LOGGING_SERVICE_NAME
+              value: logging-service
+            - name: COUNTER_SERVICE_NAME
+              value: counter-service
+            - name: KAFKA_BROKERS
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: KAFKA_BROKERS
+            - name: KAFKA_TRANSACTIONS_TOPIC
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: KAFKA_TRANSACTIONS_TOPIC
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: facade-service
+spec:
+  selector:
+    app: facade-service
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

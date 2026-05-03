@@ -12,6 +12,7 @@ pub async fn get_user_balance(
     State(app_state): State<AppState>,
     axum::extract::Path(user_id): axum::extract::Path<String>,
 ) -> Result<Json<f64>, StatusCode> {
+
     if user_id.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
